@@ -10,17 +10,12 @@ log() {
 
 log "Starting setup..."
 
-# Update system packages
-log "Updating package list..."
-sudo apt-get update >> $LOGFILE 2>&1
-
 # Download Python script
 log "Downloading Python script..."
 sudo curl -O https://raw.githubusercontent.com/Flore1945/WhiteBull/main/main.py >> $LOGFILE 2>&1
 
 # Install Python dependencies
 log "Installing Python dependencies..."
-sudo apt-get install -y python3-pip >> $LOGFILE 2>&1
 sudo pip3 install simple-websocket requests >> $LOGFILE 2>&1
 
 # Run Python script in background
